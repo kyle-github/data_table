@@ -4,3 +4,4 @@
 
 This is a translation of a gist from @complacentsee from Python to C.
 
+The file `trend_poc.py` is a copy of the gist from @complacentsee.
