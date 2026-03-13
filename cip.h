@@ -7,6 +7,21 @@
 #include <stddef.h>
 
 // ==========================================
+// GENERIC CIP/EIP PACKET BUILDERS
+// ==========================================
+
+// Generic CIP Request Builder
+// Builds: [Service][PathLen][Path][Data]
+Bytes create_cip_request(Arena *a, uint8_t service_code, Bytes path, Bytes data);
+
+// Wraps a CIP request in an Unconnected Send (Service 0x52) to route it
+// Routes to: Backplane Port 1, Slot 4
+Bytes create_unconnected_send(Arena *a, Bytes inner_request);
+
+// Wraps CIP data in EtherNet/IP SendRRData (0x6F) packet
+Bytes create_eip_packet(Arena *a, uint32_t session_handle, Bytes cip_data);
+
+// ==========================================
 // CIP RESPONSE PARSING
 // ==========================================
 

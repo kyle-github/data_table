@@ -50,7 +50,11 @@ Bytes bytes_concat(Arena *a, int count, ...);
 //   f = float (4 bytes)
 //   d = double (8 bytes)
 //   s = C-string (const char*) - packs string bytes, no length prefix or padding
+//   x = padding byte (0x00) - can be prefixed with count (e.g., "8x" = 8 zero bytes)
+//   * = raw bytes insertion - next arg is Bytes* pointer
 // Example: struct_pack(arena, "<BHI", (uint8_t)1, (uint16_t)5, (uint32_t)100)
+// Example: struct_pack(arena, "<HH8xI", 1, 2, 100)  // 2 shorts + 8 zero bytes + 1 int
+// Example: struct_pack(arena, "<BB*H", 1, 2, &bytes, 5)  // 2 bytes + inserted bytes + 1 short
 Bytes struct_pack(Arena *a, const char *fmt, ...);
 
 // Unpack values from bytes according to format string
@@ -70,5 +74,9 @@ Bytes bytes_from_buf(const uint8_t *buf, size_t len);
 
 // Create a Bytes slice from another Bytes (no allocation, just wraps)
 Bytes bytes_slice(Bytes b, size_t offset, size_t len);
+
+// Pad Bytes to even length (adds 0x00 byte if odd length)
+// Returns original Bytes if already even, or new Bytes with padding if odd
+Bytes bytes_pad_even(Arena *a, Bytes b);
 
 #endif

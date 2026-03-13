@@ -3,6 +3,53 @@
 #include <string.h>
 
 // ==========================================
+// GENERIC CIP/EIP PACKET BUILDERS
+// ==========================================
+
+// Generic CIP Request Builder
+Bytes create_cip_request(Arena *a, uint8_t service_code, Bytes path, Bytes data) {
+    // Request: [Service] [PathLen] [Path] [Data]
+    return struct_pack(a, "<BB**", service_code, (uint8_t)(path.len / 2), &path, &data);
+}
+
+// Wraps a CIP request in an Unconnected Send (Service 0x52) to route it
+// e.g. Route "1,4" -> Backplane (1), Slot 4
+Bytes create_unconnected_send(Arena *a, Bytes inner_request) {
+    // Path to Connection Manager: Class 0x06, Instance 0x01
+    Bytes cm_path = struct_pack(a, "<BBBB", 0x20, 0x06, 0x24, 0x01);
+
+    // Unconnected Send header: service, path_len, cm_path, priority, timeout, msg_len
+    Bytes head = bytes_concat(a, 3,
+                               struct_pack(a, "<BB", 0x52, 2),  // Service, Path len (2 words)
+                               cm_path,
+                               struct_pack(a, "<BBH", 0x0A, 0x09, (uint16_t)inner_request.len));  // Priority, Timeout, msg_len
+
+    // Pad inner request to even length
+    inner_request = bytes_pad_even(a, inner_request);
+
+    // Route: path_len (1 word) + port 1 + link 4
+    Bytes tail = struct_pack(a, "<BBB", 1, 0x01, 0x04);
+
+    return bytes_concat(a, 3, head, inner_request, tail);
+}
+
+// Wraps in EtherNet/IP Header (SendRRData 0x6F)
+Bytes create_eip_packet(Arena *a, uint32_t session_handle, Bytes cip_data) {
+    // Payload header: Interface(4) + Timeout(2) + ItemCount(2) + AddressItem(type+len) + DataItem(type+len)
+    Bytes payload_header = struct_pack(a, "<IHHHHH",
+                                       0, 0, 2,                    // interface, timeout, item_count
+                                       0x0000, 0x0000,             // address item (type, len)
+                                       0x00B2, (uint16_t)cip_data.len);  // data item (type, len)
+
+    size_t total_data_len = payload_header.len + cip_data.len;
+
+    // EIP Header: Command(2), Len(2), Session(4), Status(4), Context(8), Options(4)
+    Bytes header = struct_pack(a, "<HHII8xI", 0x006F, (uint16_t)total_data_len, session_handle, 0, 0);
+
+    return bytes_concat(a, 3, header, payload_header, cip_data);
+}
+
+// ==========================================
 // CIP RESPONSE PARSING
 // ==========================================
 

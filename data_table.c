@@ -49,11 +49,7 @@ uint16_t read_tag_value(EipConnection *conn, const char *tag_name) {
     Bytes sym_path = encode_tag_name(conn->arena, tag_name);
     uint8_t path_words = (uint8_t)(sym_path.len / 2);
 
-    Bytes cip_req = bytes_concat(conn->arena, 4,
-                                  pack_uint8(conn->arena, 0x4C),
-                                  pack_uint8(conn->arena, path_words),
-                                  sym_path,
-                                  struct_pack(conn->arena, "<H", (uint16_t)1));
+    Bytes cip_req = struct_pack(conn->arena, "<BB*H", 0x4C, path_words, &sym_path, (uint16_t)1);
 
     Bytes response = send_cip_command(conn, cip_req);
 
@@ -95,13 +91,11 @@ void get_trend_attributes(EipConnection *conn, uint32_t instance_id) {
 
     Bytes path = create_cip_class_path(conn->arena, 0xB2, instance_id);
 
-    // Pack attribute IDs: count + 1, 3, 5, 6, 7, 8, 10 (0x0A) all in one struct_pack
-    Bytes attr_data = struct_pack(conn->arena, "<HHHHHHHH", 7, 1, 3, 5, 6, 7, 8, 0x0A);
-
-    Bytes cip_req = bytes_concat(conn->arena, 3,
-                                  struct_pack(conn->arena, "<BB", 0x03, (uint8_t)(path.len / 2)),
-                                  path,
-                                  attr_data);
+    // Pack CIP request: service, path_len, path, attr_count, attr_ids
+    Bytes cip_req = struct_pack(conn->arena, "<BB*HHHHHHHH",
+                                0x03, (uint8_t)(path.len / 2),
+                                &path,
+                                7, 1, 3, 5, 6, 7, 8, 0x0A);
 
     Bytes response = send_cip_command(conn, cip_req);
 
@@ -121,70 +115,7 @@ void get_trend_attributes(EipConnection *conn, uint32_t instance_id) {
 }
 
 // ==========================================
-// 2. GENERIC CIP REQUEST BUILDERS
-// ==========================================
-
-// Generic CIP Request Builder
-Bytes create_cip_request(Arena *a, uint8_t service_code, Bytes path, Bytes data) {
-    Bytes service = pack_uint8(a, service_code);
-    // Path len is in 16-bit words
-    Bytes path_len = pack_uint8(a, (uint8_t)(path.len / 2));
-
-    // Request: [Service] [PathLen] [Path] [Data]
-    return bytes_concat(a, 4, service, path_len, path, data);
-}
-
-// Wraps a CIP request in an Unconnected Send (Service 0x52) to route it
-// e.g. Route "1,4" -> Backplane (1), Slot 4
-Bytes create_unconnected_send(Arena *a, Bytes inner_request) {
-    // Path to Connection Manager: Class 0x06, Instance 0x01
-    Bytes cm_path = struct_pack(a, "<BBBB", 0x20, 0x06, 0x24, 0x01);
-
-    // Route Path: "1,4" -> Port 1, Link 4
-    Bytes route_path = struct_pack(a, "<BB", 0x01, 0x04);
-
-    Bytes head = bytes_concat(a, 6,
-                               pack_uint8(a, 0x52),  // Service
-                               pack_uint8(a, 2),    // Path len (2 words)
-                               cm_path,
-                               pack_uint8(a, 0x0A), // Priority
-                               pack_uint8(a, 0x09), // Timeout
-                               struct_pack(a, "<H", (uint16_t)inner_request.len));
-
-    // Check padding for inner request
-    if(inner_request.len % 2 != 0) {
-        inner_request = bytes_concat(a, 2, inner_request, pack_uint8(a, 0x00));
-    }
-
-    Bytes tail = bytes_concat(a, 2, pack_uint8(a, 1), route_path);  // Route len (1 word) + path
-
-    return bytes_concat(a, 3, head, inner_request, tail);
-}
-
-// Wraps in EtherNet/IP Header (SendRRData 0x6F)
-Bytes create_eip_packet(Arena *a, uint32_t session_handle, Bytes cip_data) {
-    // Payload header: Interface(4) + Timeout(2) + ItemCount(2) + AddressItem(4) + DataItem(4+N)
-    Bytes payload_header = bytes_concat(a, 4,
-                                         struct_pack(a, "<IHH", 0, 0, 2),
-                                         struct_pack(a, "<HH", 0x0000, 0x0000),  // Address item
-                                         struct_pack(a, "<HH", 0x00B2, (uint16_t)cip_data.len));  // Data item
-
-    size_t total_data_len = payload_header.len + cip_data.len;
-
-    // EIP Header: Command(2), Len(2), Session(4), Status(4), Context(8), Options(4)
-    Bytes header = bytes_concat(a, 2,
-                                struct_pack(a, "<HHI", 0x006F, (uint16_t)total_data_len, session_handle),
-                                struct_pack(a, "<I", 0));  // Status
-
-    // Context(8) + Options(4)
-    Bytes context = bytes_repeat(a, 0, 8);
-    Bytes options = struct_pack(a, "<I", 0);
-
-    return bytes_concat(a, 5, header, context, options, payload_header, cip_data);
-}
-
-// ==========================================
-// 3. EIP CONNECTION FUNCTIONS
+// 2. EIP CONNECTION FUNCTIONS
 // ==========================================
 
 
@@ -228,20 +159,10 @@ void eip_disconnect(EipConnection *conn) {
 
 // Sends a RegisterSession command and stores the session handle
 bool eip_register_session(EipConnection *conn) {
-    // EIP Header for RegisterSession (0x65)
-    Bytes command = pack_uint16_le(conn->arena, 0x0065);
-    Bytes length = pack_uint16_le(conn->arena, 4);  // Payload length is 4
-    Bytes session = pack_uint32_le(conn->arena, 0);
-    Bytes status = pack_uint32_le(conn->arena, 0);
-    Bytes context = bytes_repeat(conn->arena, 0, 8);
-    Bytes options = pack_uint32_le(conn->arena, 0);
-
-    // Payload for RegisterSession
-    Bytes protocol_version = pack_uint16_le(conn->arena, 1);
-    Bytes option_flags = pack_uint16_le(conn->arena, 0);
-
-    Bytes packet =
-        bytes_concat(conn->arena, 8, command, length, session, status, context, options, protocol_version, option_flags);
+    // EIP Header for RegisterSession (0x65) + Payload
+    // Header: Command(2), Len(2), Session(4), Status(4), Context(8), Options(4)
+    // Payload: Protocol(2), Flags(2)
+    Bytes packet = struct_pack(conn->arena, "<HHII8xIHH", 0x0065, 4, 0, 0, 0, 1, 0);
 
     if(send(conn->sock_fd, packet.data, packet.len, 0) < 0) {
         perror("RegisterSession send failed");
@@ -297,29 +218,17 @@ Bytes eip_send_rr_data(Arena *a, EipConnection *conn, Bytes cip_data) {
 // Forward Open (0x54) to establish connected transport
 bool eip_forward_open(EipConnection *conn, uint8_t slot) {
     // Build Forward Open request
-    // Path: Connection Manager (class 0x06, instance 0x01)
-    Bytes cm_path = bytes_join(conn->arena, pack_uint8(conn->arena, 0x20), pack_uint8(conn->arena, 0x06));
-    cm_path = bytes_join(conn->arena, cm_path, pack_uint8(conn->arena, 0x24));
-    cm_path = bytes_join(conn->arena, cm_path, pack_uint8(conn->arena, 0x01));
-
-    Bytes service = pack_uint8(conn->arena, 0x54);
-    Bytes path_len = pack_uint8(conn->arena, 2);
-
-    // Forward Open data: priority, timeout, cpid, serial, vendor, serial_num, timeout_us, conn_path_size, conn_path
-    Bytes priority = pack_uint8(conn->arena, 0x0A);
-    Bytes timeout_ticks = pack_uint8(conn->arena, 0x09);
-    Bytes cpid = pack_uint32_le(conn->arena, 0);  // Will be assigned by PLC
-    Bytes sssn = pack_uint16_le(conn->arena, 0x0001);  // Serial
-    Bytes reserved = pack_uint16_le(conn->arena, 0);
-    Bytes conn_timeout = pack_uint32_le(conn->arena, 30000000);  // 30 seconds in µs
-    Bytes vendor = pack_uint16_le(conn->arena, 0x01FA);  // Rockwell vendor code
-    Bytes serial = pack_uint32_le(conn->arena, 0x00000001);
-    Bytes conn_path_size = pack_uint8(conn->arena, 0);  // No connection path for backplane access
-
-    Bytes fo_data = bytes_concat(conn->arena, 10, priority, timeout_ticks, cpid, sssn, reserved,
-                                  conn_timeout, vendor, serial, conn_path_size, (Bytes){NULL, 0});
-
-    Bytes cip_req = bytes_concat(conn->arena, 4, service, path_len, cm_path, fo_data);
+    // CIP Request: Service, PathLen, Path (Connection Manager), Forward Open Data
+    Bytes cip_req = struct_pack(conn->arena, "<BBBBBBBBIHHIHIB",
+                                0x54, 2,           // service, path_len (2 words)
+                                0x20, 0x06, 0x24, 0x01,  // cm_path (class 0x06, instance 0x01)
+                                0x0A, 0x09,        // priority, timeout_ticks
+                                0,                 // cpid (assigned by PLC)
+                                0x0001, 0,         // sssn, reserved
+                                30000000,          // conn_timeout (30s in µs)
+                                0x01FA,            // vendor (Rockwell)
+                                0x00000001,        // serial
+                                0);                // conn_path_size
 
     // Wrap in Unconnected Send and send
     Bytes routed = create_unconnected_send(conn->arena, cip_req);
@@ -361,23 +270,15 @@ void eip_forward_close(EipConnection *conn) {
     }
 
     // Build Forward Close request
-    Bytes cm_path = bytes_join(conn->arena, pack_uint8(conn->arena, 0x20), pack_uint8(conn->arena, 0x06));
-    cm_path = bytes_join(conn->arena, cm_path, pack_uint8(conn->arena, 0x24));
-    cm_path = bytes_join(conn->arena, cm_path, pack_uint8(conn->arena, 0x01));
-
-    Bytes service = pack_uint8(conn->arena, 0x4E);
-    Bytes path_len = pack_uint8(conn->arena, 2);
-
-    // Forward Close data: priority, timeout, sssn, vendor, serial, reserved
-    Bytes priority = pack_uint8(conn->arena, 0x0A);
-    Bytes timeout_ticks = pack_uint8(conn->arena, 0x09);
-    Bytes sssn = pack_uint16_le(conn->arena, conn->sssn);
-    Bytes vendor = pack_uint16_le(conn->arena, 0x01FA);
-    Bytes serial = pack_uint32_le(conn->arena, 0x00000001);
-    Bytes reserved = pack_uint16_le(conn->arena, 0);
-
-    Bytes fc_data = bytes_concat(conn->arena, 6, priority, timeout_ticks, sssn, vendor, serial, reserved);
-    Bytes cip_req = bytes_concat(conn->arena, 4, service, path_len, cm_path, fc_data);
+    // CIP Request: Service, PathLen, Path (Connection Manager), Forward Close Data
+    Bytes cip_req = struct_pack(conn->arena, "<BBBBBBBBHHIH",
+                                0x4E, 2,           // service, path_len (2 words)
+                                0x20, 0x06, 0x24, 0x01,  // cm_path (class 0x06, instance 0x01)
+                                0x0A, 0x09,        // priority, timeout_ticks
+                                conn->sssn,        // session serial number
+                                0x01FA,            // vendor (Rockwell)
+                                0x00000001,        // serial
+                                0);                // reserved
 
     Bytes routed = create_unconnected_send(conn->arena, cip_req);
     eip_send_rr_data(conn->arena, conn, routed);

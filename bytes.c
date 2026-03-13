@@ -289,17 +289,44 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
     va_list args_count;
     va_start(args_count, fmt);
     size_t total_size = 0;
-    for(const char *p = format_chars; *p; p++) {
-        char c = *p;
-        if(c == 'b' || c == 'B') total_size += 1;
-        else if(c == 'h' || c == 'H') total_size += 2;
-        else if(c == 'i' || c == 'I' || c == 'f') total_size += 4;
-        else if(c == 'q' || c == 'Q' || c == 'd') total_size += 8;
-        else if(c == 's') {
-            // For strings, peek ahead in va_args
+    for(const char *p = format_chars; *p; ) {
+        // Parse optional count prefix
+        size_t count = 1;
+        if(*p >= '0' && *p <= '9') {
+            count = 0;
+            while(*p >= '0' && *p <= '9') {
+                count = count * 10 + (*p - '0');
+                p++;
+            }
+            if(!*p) break;  // malformed format
+        }
+
+        char c = *p++;
+        if(c == 'x') {
+            // Padding bytes - no args consumed
+            total_size += count;
+        } else if(c == '*') {
+            // Raw bytes insertion - consume Bytes* arg
+            Bytes *b = va_arg(args_count, Bytes*);
+            if(b) total_size += b->len;
+        } else if(c == 's') {
+            // String - consume const char* arg
             const char *str = va_arg(args_count, const char*);
             if(str) total_size += strlen(str);
+        } else if(c == 'b' || c == 'B') {
+            total_size += 1 * count;
+            for(size_t i = 0; i < count; i++) va_arg(args_count, uint64_t);
+        } else if(c == 'h' || c == 'H') {
+            total_size += 2 * count;
+            for(size_t i = 0; i < count; i++) va_arg(args_count, uint64_t);
+        } else if(c == 'i' || c == 'I' || c == 'f') {
+            total_size += 4 * count;
+            for(size_t i = 0; i < count; i++) va_arg(args_count, uint64_t);
+        } else if(c == 'q' || c == 'Q' || c == 'd') {
+            total_size += 8 * count;
+            for(size_t i = 0; i < count; i++) va_arg(args_count, uint64_t);
         } else {
+            // Unknown format, consume arg
             va_arg(args_count, uint64_t);
         }
     }
@@ -317,16 +344,41 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
     va_start(args, fmt);
 
     size_t offset = 0;
-    for(const char *p = format_chars; *p; p++) {
-        char c = *p;
-        if(c == 's') {
+    for(const char *p = format_chars; *p; ) {
+        // Parse optional count prefix
+        size_t count = 1;
+        if(*p >= '0' && *p <= '9') {
+            count = 0;
+            while(*p >= '0' && *p <= '9') {
+                count = count * 10 + (*p - '0');
+                p++;
+            }
+            if(!*p) break;  // malformed format
+        }
+
+        char c = *p++;
+        if(c == 'x') {
+            // Padding bytes
+            memset(buf + offset, 0, count);
+            offset += count;
+        } else if(c == '*') {
+            // Raw bytes insertion
+            Bytes *b = va_arg(args, Bytes*);
+            if(b && b->data) {
+                memcpy(buf + offset, b->data, b->len);
+                offset += b->len;
+            }
+        } else if(c == 's') {
             const char *str = va_arg(args, const char*);
             size_t written = pack_value(buf + offset, 0, str, c, byte_order);
             offset += written;
         } else {
-            uint64_t val = va_arg(args, uint64_t);
-            size_t written = pack_value(buf + offset, val, NULL, c, byte_order);
-            offset += written;
+            // Regular format characters
+            for(size_t i = 0; i < count; i++) {
+                uint64_t val = va_arg(args, uint64_t);
+                size_t written = pack_value(buf + offset, val, NULL, c, byte_order);
+                offset += written;
+            }
         }
     }
 
@@ -424,4 +476,13 @@ Bytes bytes_slice(Bytes b, size_t offset, size_t len) {
         return (Bytes){NULL, 0};  // invalid slice
     }
     return (Bytes){b.data + offset, len};
+}
+
+// Pad Bytes to even length (adds 0x00 byte if odd length)
+Bytes bytes_pad_even(Arena *a, Bytes b) {
+    if(b.len % 2 == 0) {
+        return b;  // Already even
+    }
+    // Odd length: add padding byte
+    return bytes_concat(a, 2, b, pack_uint8(a, 0x00));
 }
