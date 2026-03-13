@@ -79,4 +79,15 @@ Bytes bytes_slice(Bytes b, size_t offset, size_t len);
 // Returns original Bytes if already even, or new Bytes with padding if odd
 Bytes bytes_pad_even(Arena *a, Bytes b);
 
+// ==========================================
+// DEBUGGING / HEX DUMP
+// ==========================================
+
+// Hex dump a Bytes object as 16 columns of hex bytes (no ASCII)
+// Each byte is two uppercase hex digits, space-separated
+// Example output:
+//   54 02 20 06 24 01 0A 0E 13 CD 00 80 9E BE 3F 80
+//   35 8A 34 12 01 00 00 00 03 00 00 00 40 13 20 00
+void bytes_hexdump(Bytes b, const char *label);
+
 #endif

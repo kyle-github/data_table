@@ -3,12 +3,14 @@
 #include "cip.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 // ==========================================
@@ -133,17 +135,26 @@ EipConnection eip_connect(Arena *a, const char *ip, int port) {
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port);
+
+    fprintf(stderr, "[DEBUG] Attempting to connect to %s:%d\n", ip, port);
+    fprintf(stderr, "[DEBUG] Socket fd: %d\n", conn.sock_fd);
+
     if(inet_pton(AF_INET, ip, &server_addr.sin_addr) <= 0) {
         fprintf(stderr, "Invalid address/ Address not supported \n");
         close(conn.sock_fd);
         exit(1);
     }
 
+    fprintf(stderr, "[DEBUG] Address parsed successfully, calling connect()...\n");
+
     if(connect(conn.sock_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        fprintf(stderr, "[DEBUG] connect() failed with errno: %d\n", errno);
         perror("Connection Failed");
         close(conn.sock_fd);
         exit(1);
     }
+
+    fprintf(stderr, "[DEBUG] Connection successful!\n");
 
     return conn;
 }
@@ -197,6 +208,8 @@ bool eip_register_session(EipConnection *conn) {
 Bytes eip_send_rr_data(Arena *a, EipConnection *conn, Bytes cip_data) {
     Bytes packet = create_eip_packet(conn->arena, conn->session_handle, cip_data);
 
+    bytes_hexdump(packet, "[SEND]");
+
     if(send(conn->sock_fd, packet.data, packet.len, 0) < 0) {
         perror("SendRRData send failed");
         return (Bytes){NULL, 0};
@@ -212,27 +225,47 @@ Bytes eip_send_rr_data(Arena *a, EipConnection *conn, Bytes cip_data) {
         return (Bytes){NULL, 0};
     }
 
-    return (Bytes){buf, (size_t)received};
+    Bytes response = (Bytes){buf, (size_t)received};
+    bytes_hexdump(response, "[RECV]");
+
+    return response;
 }
 
 // Forward Open (0x54) to establish connected transport
 bool eip_forward_open(EipConnection *conn, uint8_t slot) {
-    // Build Forward Open request
-    // CIP Request: Service, PathLen, Path (Connection Manager), Forward Open Data
-    Bytes cip_req = struct_pack(conn->arena, "<BBBBBBBBIHHIHIB",
-                                0x54, 2,           // service, path_len (2 words)
-                                0x20, 0x06, 0x24, 0x01,  // cm_path (class 0x06, instance 0x01)
-                                0x0A, 0x09,        // priority, timeout_ticks
-                                0,                 // cpid (assigned by PLC)
-                                0x0001, 0,         // sssn, reserved
-                                30000000,          // conn_timeout (30s in µs)
-                                0x01FA,            // vendor (Rockwell)
-                                0x00000001,        // serial
-                                0);                // conn_path_size
+    // Generate random connection IDs and serial number
+    uint32_t ot_id = 0x80000000 | (rand() & 0xFFFF);
+    uint32_t to_id = 0x803F0000 | (rand() & 0xFFFF);
+    uint16_t conn_serial = (uint16_t)(rand() & 0xFFFF);
 
-    // Wrap in Unconnected Send and send
-    Bytes routed = create_unconnected_send(conn->arena, cip_req);
-    Bytes response = eip_send_rr_data(conn->arena, conn, routed);
+    // Connection path: backplane port 1 → slot → class 0x02, instance 0x01
+    Bytes conn_path = struct_pack(conn->arena, "<BBBBBB", 0x01, slot, 0x20, 0x02, 0x24, 0x01);
+
+    // Build complete Forward Open request matching Python implementation
+    Bytes fo_data = bytes_concat(conn->arena, 4,
+                                 // Service + path to Connection Manager
+                                 struct_pack(conn->arena, "<BBBBBB", 0x54, 0x02, 0x20, 0x06, 0x24, 0x01),
+                                 // Priority, timeout, connection IDs, serial, vendor, originator
+                                 struct_pack(conn->arena, "<BBIIHHI",
+                                             0x0A, 0x0E,      // priority/tick, timeout ticks
+                                             ot_id,           // O->T connection ID
+                                             to_id,           // T->O connection ID
+                                             conn_serial,     // connection serial
+                                             0x1234,          // vendor ID
+                                             0x00000001),     // originator serial
+                                 // Timeout multiplier + reserved + RPIs + params + transport
+                                 struct_pack(conn->arena, "<B3xIHIHB",
+                                             0x03,            // timeout multiplier
+                                             0x00201340,      // O->T RPI (2s)
+                                             0x43F4,          // O->T params (500 bytes, class 3)
+                                             0x00201340,      // T->O RPI (2s)
+                                             0x43F4,          // T->O params
+                                             0xA3),           // transport trigger (class 3)
+                                 // Connection path
+                                 struct_pack(conn->arena, "<B*", (uint8_t)(conn_path.len / 2), &conn_path));
+
+    // Send directly via SendRRData (NOT wrapped in Unconnected Send!)
+    Bytes response = eip_send_rr_data(conn->arena, conn, fo_data);
 
     if(response.len < 36) {  // Minimum: EIP header (24) + address (4) + data header (4) + CIP header (4)
         if(response.len >= 12) {
@@ -247,19 +280,37 @@ bool eip_forward_open(EipConnection *conn, uint8_t slot) {
 
     CipResponse cip_resp = parse_cip_response(response);
     if(cip_resp.header.status != 0) {
-        fprintf(stderr, "Forward Open failed with status 0x%02X\n", cip_resp.header.status);
+        fprintf(stderr, "Forward Open failed with CIP status 0x%02X", cip_resp.header.status);
+        if(cip_resp.header.ext_status_words > 0 && cip_resp.payload.len >= 2) {
+            uint16_t ext_status = 0;
+            struct_unpack(cip_resp.payload, "<H", &ext_status);
+            fprintf(stderr, ", ext_status 0x%04X (%u)", ext_status, ext_status);
+        }
+        fprintf(stderr, "\n");
         return false;
     }
 
-    // Extract CPID and serial from response
+    // Extract O->T and T->O connection IDs from response
+    // Response format: [reserved bytes][O->T ID:4][T->O ID:4][...]
     Bytes payload = cip_get_response_data(cip_resp);
-    if(payload.data != NULL && payload.len >= 6) {
-        struct_unpack(payload, "<IH", &conn->cpid, &conn->sssn);
+    if(payload.data != NULL && payload.len >= 12) {
+        uint32_t ot_connection_id = 0;
+        uint32_t to_connection_id = 0;
+
+        // Skip first 4 bytes (reserved), then read O->T and T->O IDs
+        Bytes conn_data = bytes_slice(payload, 4, payload.len - 4);
+        struct_unpack(conn_data, "<II", &ot_connection_id, &to_connection_id);
+
+        printf("[*] Forward Open OK: O->T=0x%08X, T->O=0x%08X\n", ot_connection_id, to_connection_id);
+
+        // Store connection info
+        conn->cpid = ot_connection_id;
+        conn->sssn = conn_serial;
         conn->connected = true;
-        printf("[*] Forward Open succeeded: CPID=0x%08X SSSN=0x%04X\n", conn->cpid, conn->sssn);
         return true;
     }
 
+    fprintf(stderr, "Forward Open response payload too short (got %zu bytes)\n", payload.len);
     return false;
 }
 
@@ -286,18 +337,42 @@ void eip_forward_close(EipConnection *conn) {
     conn->connected = false;
 }
 
-// Helper to send a CIP request through the full EIP stack (using Unconnected Send)
+// Helper to send a CIP request through the full EIP stack
+// Always uses Unconnected Send for now (connected transport format may not be supported)
 Bytes send_cip_command(EipConnection *conn, Bytes cip_req) {
-    // 1. Wrap in Unconnected Send (Routing to Backplane 1, Slot 4)
-    Bytes routed = create_unconnected_send(conn->arena, cip_req);
+    Bytes packet;
 
-    // 2. Send via SendRRData
-    Bytes response = eip_send_rr_data(conn->arena, conn, routed);
+    // Use Unconnected Send wrapper (Routing to Backplane 1, Slot 4)
+    Bytes routed = create_unconnected_send(conn->arena, cip_req);
+    packet = create_eip_packet(conn->arena, conn->session_handle, routed);
+
+    bytes_hexdump(packet, "[REQUEST]");
+
+    if(send(conn->sock_fd, packet.data, packet.len, 0) < 0) {
+        perror("send failed");
+        return (Bytes){NULL, 0};
+    }
+
+    // Reset arena after sending, allocate fresh space for response
+    arena_reset(conn->arena);
+    uint8_t *buf = arena_alloc(conn->arena, 4096);
+
+    ssize_t received = recv(conn->sock_fd, buf, 4096, 0);
+    if(received < 0) {
+        perror("recv failed");
+        return (Bytes){NULL, 0};
+    }
+
+    Bytes response = (Bytes){buf, (size_t)received};
+    bytes_hexdump(response, "[RESPONSE]");
 
     return response;
 }
 
 int main() {
+    // Seed random number generator for Forward Open connection IDs
+    srand((unsigned int)time(NULL));
+
     // 1. Setup Arena (1MB heap)
     Arena mem = arena_init(1024 * 1024);
 

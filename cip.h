@@ -18,8 +18,12 @@ Bytes create_cip_request(Arena *a, uint8_t service_code, Bytes path, Bytes data)
 // Routes to: Backplane Port 1, Slot 4
 Bytes create_unconnected_send(Arena *a, Bytes inner_request);
 
-// Wraps CIP data in EtherNet/IP SendRRData (0x6F) packet
+// Wraps CIP data in EtherNet/IP SendRRData (0x6F) packet (unconnected format)
 Bytes create_eip_packet(Arena *a, uint32_t session_handle, Bytes cip_data);
+
+// Wraps CIP data in EtherNet/IP SendRRData (0x6F) packet (connected transport format)
+// Uses connection ID in CPF Address Item instead of empty address item
+Bytes create_connected_packet(Arena *a, uint32_t session_handle, uint32_t connection_id, Bytes cip_data);
 
 // ==========================================
 // CIP RESPONSE PARSING

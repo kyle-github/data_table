@@ -27,16 +27,16 @@ Bytes create_unconnected_send(Arena *a, Bytes inner_request) {
     // Pad inner request to even length
     inner_request = bytes_pad_even(a, inner_request);
 
-    // Route: path_len (1 word) + port 1 + link 4
-    Bytes tail = struct_pack(a, "<BBB", 1, 0x01, 0x04);
+    // Route: path_len (1 word) + padding + port 1 + link 4
+    Bytes tail = struct_pack(a, "<BBBB", 1, 0x00, 0x01, 0x04);
 
     return bytes_concat(a, 3, head, inner_request, tail);
 }
 
-// Wraps in EtherNet/IP Header (SendRRData 0x6F)
+// Wraps in EtherNet/IP Header (SendRRData 0x6F) - unconnected format
 Bytes create_eip_packet(Arena *a, uint32_t session_handle, Bytes cip_data) {
     // Payload header: Interface(4) + Timeout(2) + ItemCount(2) + AddressItem(type+len) + DataItem(type+len)
-    Bytes payload_header = struct_pack(a, "<IHHHHH",
+    Bytes payload_header = struct_pack(a, "<IHHHHHH",
                                        0, 0, 2,                    // interface, timeout, item_count
                                        0x0000, 0x0000,             // address item (type, len)
                                        0x00B2, (uint16_t)cip_data.len);  // data item (type, len)
@@ -49,36 +49,107 @@ Bytes create_eip_packet(Arena *a, uint32_t session_handle, Bytes cip_data) {
     return bytes_concat(a, 3, header, payload_header, cip_data);
 }
 
+// Wraps in EtherNet/IP Header (SendRRData 0x6F) - connected transport format
+// Uses connection_id in CPF Address Item (type 0x8000, length 4)
+Bytes create_connected_packet(Arena *a, uint32_t session_handle, uint32_t connection_id, Bytes cip_data) {
+    // CPF Header: Interface(4) + Timeout(2) + ItemCount(2)
+    Bytes cpf_header = struct_pack(a, "<IHH", 0, 0, 2);
+
+    // Address Item: Type 0x8000 (connection ID), Length 4
+    Bytes address_item = bytes_concat(a, 2,
+                                      struct_pack(a, "<HH", 0x8000, 4),
+                                      struct_pack(a, "<I", connection_id));
+
+    // Data Item: Type 0x00B2, Length = len(cip_data)
+    Bytes data_item_header = struct_pack(a, "<HH", 0x00B2, (uint16_t)cip_data.len);
+
+    // Payload = CPF Header + Address Item + Data Item Header + CIP Data
+    Bytes payload = bytes_concat(a, 4, cpf_header, address_item, data_item_header, cip_data);
+
+    // EIP Header: Command(2), Len(2), Session(4), Status(4), Context(8), Options(4)
+    Bytes header = struct_pack(a, "<HHII8xI", 0x006F, (uint16_t)payload.len, session_handle, 0, 0);
+
+    return bytes_concat(a, 2, header, payload);
+}
+
 // ==========================================
 // CIP RESPONSE PARSING
 // ==========================================
 
 // Parse CIP response from unconnected send wrapper
 // Response structure:
-//   EIP header (24) + address item (4) + data item (4) + reserved (2) + CIP response
+//   EIP header (24) + CPF header (8) + Address item (4) + Data item header (4) + CIP response
 //   CIP response: [srv][reserved][status][ext_status_words][ext_status... if words>0][data...]
 CipResponse parse_cip_response(Bytes response) {
     CipResponse result = {{0, 0, 0xFF, 0}, {NULL, 0}};
 
-    // Locate CIP response within EIP packet
-    // Fixed offset: EIP header (24) + address item (4) + data item (4) = 32
-    size_t cip_offset = 32;
+    // Debug: decode all header fields
+    if(response.len < 40) {
+        result.header.status = 0xFF;
+        return result;
+    }
 
-    // Skip EIP reserved bytes (2 bytes after CPF items)
-    cip_offset += 2;
+    // EIP Encapsulation Header (24 bytes)
+    // Command(2) + Length(2) + Session(4) + Status(4) + Context(8) + Options(4)
+    uint16_t eip_command = 0;
+    uint16_t eip_length = 0;
+    uint32_t eip_session = 0;
+    uint32_t eip_status = 0;
+    uint64_t eip_context = 0;  // 8 bytes, usually unused
+    uint32_t eip_options = 0;
 
-    if(response.len < cip_offset + 4) {
+    Bytes remaining = struct_unpack(response, "<HHIIQI",
+                                    &eip_command,
+                                    &eip_length,
+                                    &eip_session,
+                                    &eip_status,
+                                    &eip_context,
+                                    &eip_options);
+
+    // CPF Header (8 bytes): interface(4) + timeout(2) + item_count(2)
+    uint32_t cpf_interface = 0;
+    uint16_t cpf_timeout = 0;
+    uint16_t cpf_item_count = 0;
+
+    remaining = struct_unpack(remaining, "<IHH",
+                             &cpf_interface,
+                             &cpf_timeout,
+                             &cpf_item_count);
+
+    // Address Item (4 bytes): type(2) + length(2) + data(length bytes)
+    uint16_t addr_type = 0;
+    uint16_t addr_len = 0;
+
+    remaining = struct_unpack(remaining, "<HH", &addr_type, &addr_len);
+
+    // Skip address item data if present
+    if(addr_len > 0) {
+        if(remaining.len < addr_len) {
+            result.header.status = 0xFF;
+            return result;
+        }
+        remaining = bytes_slice(remaining, addr_len, remaining.len - addr_len);
+    }
+
+    // Data Item Header (4 bytes): type(2) + length(2) + data(length bytes)
+    uint16_t data_type = 0;
+    uint16_t data_len = 0;
+
+    remaining = struct_unpack(remaining, "<HH", &data_type, &data_len);
+
+    // Verify we have enough data for CIP response header (4 bytes minimum)
+    if(remaining.len < 4) {
         result.header.status = 0xFF;  // Invalid - not enough data for header
         return result;
     }
 
     // Parse CIP response header using struct_unpack
-    Bytes cip_data = bytes_slice(response, cip_offset, response.len - cip_offset);
-    Bytes remaining = struct_unpack(cip_data, "<BBBB",
-                                    &result.header.srv,
-                                    &result.header.reserved,
-                                    &result.header.status,
-                                    &result.header.ext_status_words);
+    // Note: remaining already points to the CIP data (after all the EIP/CPF headers)
+    remaining = struct_unpack(remaining, "<BBBB",
+                             &result.header.srv,
+                             &result.header.reserved,
+                             &result.header.status,
+                             &result.header.ext_status_words);
 
     if(remaining.data == NULL) {
         result.header.status = 0xFF;  // Parse error
@@ -140,7 +211,7 @@ Bytes encode_tag_name(Arena *a, const char *tag) {
 
 // Create Trend payload: [attr_count:u16=2][attr_id:u16=8][buffer_size:u32][attr_id:u16=3][num_tags:u8]
 Bytes create_trend_payload(Arena *a, uint32_t buffer_size, uint8_t num_tags) {
-    return bytes_concat(a, 5,
+    return bytes_concat(a, 3,
                         struct_pack(a, "<HHI", 2, 8, buffer_size),
                         struct_pack(a, "<H", 3),
                         pack_uint8(a, num_tags));
@@ -148,7 +219,7 @@ Bytes create_trend_payload(Arena *a, uint32_t buffer_size, uint8_t num_tags) {
 
 // SetAttributeList payload: [attr_count:u16=2][attr_id:u16=1][sample_rate:u32][attr_id:u16=5][state:u8]
 Bytes create_set_attrs_payload(Arena *a, uint32_t sample_rate_us, uint8_t state) {
-    return bytes_concat(a, 4,
+    return bytes_concat(a, 3,
                         struct_pack(a, "<HHI", 2, 1, sample_rate_us),
                         struct_pack(a, "<H", 5),
                         pack_uint8(a, state));
@@ -159,7 +230,7 @@ Bytes create_add_tag_payload(Arena *a, const char *tag_name) {
     Bytes sym_path = encode_tag_name(a, tag_name);
     uint8_t path_size_words = (uint8_t)(sym_path.len / 2);
 
-    return bytes_concat(a, 5,
+    return bytes_concat(a, 4,
                         struct_pack(a, "<H", 1),  // num_tags
                         struct_pack(a, "<BBB", 1, 1, path_size_words),  // tag_index, type, path_size
                         sym_path,

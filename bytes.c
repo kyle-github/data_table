@@ -319,12 +319,18 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
         } else if(c == 'h' || c == 'H') {
             total_size += 2 * count;
             for(size_t i = 0; i < count; i++) va_arg(args_count, uint64_t);
-        } else if(c == 'i' || c == 'I' || c == 'f') {
+        } else if(c == 'i' || c == 'I') {
             total_size += 4 * count;
             for(size_t i = 0; i < count; i++) va_arg(args_count, uint64_t);
-        } else if(c == 'q' || c == 'Q' || c == 'd') {
+        } else if(c == 'f') {
+            total_size += 4 * count;
+            for(size_t i = 0; i < count; i++) va_arg(args_count, double);  // floats promoted to double
+        } else if(c == 'q' || c == 'Q') {
             total_size += 8 * count;
             for(size_t i = 0; i < count; i++) va_arg(args_count, uint64_t);
+        } else if(c == 'd') {
+            total_size += 8 * count;
+            for(size_t i = 0; i < count; i++) va_arg(args_count, double);
         } else {
             // Unknown format, consume arg
             va_arg(args_count, uint64_t);
@@ -375,7 +381,20 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
         } else {
             // Regular format characters
             for(size_t i = 0; i < count; i++) {
-                uint64_t val = va_arg(args, uint64_t);
+                uint64_t val;
+                if(c == 'f') {
+                    // Floats are promoted to double in variadic args
+                    double d = va_arg(args, double);
+                    float f = (float)d;
+                    uint32_t bits;
+                    memcpy(&bits, &f, 4);
+                    val = bits;
+                } else if(c == 'd') {
+                    double d = va_arg(args, double);
+                    memcpy(&val, &d, 8);
+                } else {
+                    val = va_arg(args, uint64_t);
+                }
                 size_t written = pack_value(buf + offset, val, NULL, c, byte_order);
                 offset += written;
             }
@@ -485,4 +504,21 @@ Bytes bytes_pad_even(Arena *a, Bytes b) {
     }
     // Odd length: add padding byte
     return bytes_concat(a, 2, b, pack_uint8(a, 0x00));
+}
+
+// ==========================================
+// DEBUGGING / HEX DUMP
+// ==========================================
+
+void bytes_hexdump(Bytes b, const char *label) {
+    printf("\n%s (%zu bytes):\n", label, b.len);
+    for(size_t i = 0; i < b.len; i += 16) {
+        printf("  ");
+        size_t chunk_size = (b.len - i < 16) ? (b.len - i) : 16;
+        for(size_t j = 0; j < chunk_size; j++) {
+            printf("%02X", b.data[i + j]);
+            if(j < chunk_size - 1) printf(" ");
+        }
+        printf("\n");
+    }
 }
