@@ -95,14 +95,11 @@ void get_trend_attributes(EipConnection *conn, uint32_t instance_id) {
 
     Bytes path = create_cip_class_path(conn->arena, 0xB2, instance_id);
 
-    // Pack attribute IDs: 1, 3, 5, 6, 7, 8, 10 (0x0A)
-    Bytes attr_data = bytes_concat(conn->arena, 8,
-                                    struct_pack(conn->arena, "<H", 7),  // count
-                                    struct_pack(conn->arena, "<HHHHHHH", 1, 3, 5, 6, 7, 8, 0x0A));
+    // Pack attribute IDs: count + 1, 3, 5, 6, 7, 8, 10 (0x0A) all in one struct_pack
+    Bytes attr_data = struct_pack(conn->arena, "<HHHHHHHH", 7, 1, 3, 5, 6, 7, 8, 0x0A);
 
-    Bytes cip_req = bytes_concat(conn->arena, 4,
-                                  pack_uint8(conn->arena, 0x03),
-                                  pack_uint8(conn->arena, (uint8_t)(path.len / 2)),
+    Bytes cip_req = bytes_concat(conn->arena, 3,
+                                  struct_pack(conn->arena, "<BB", 0x03, (uint8_t)(path.len / 2)),
                                   path,
                                   attr_data);
 
@@ -251,6 +248,8 @@ bool eip_register_session(EipConnection *conn) {
         return false;
     }
 
+    // Reset arena after sending request, allocate fresh space for response
+    arena_reset(conn->arena);
     uint8_t *buf = arena_alloc(conn->arena, 256);  // Response is small
     ssize_t received = recv(conn->sock_fd, buf, 256, 0);
     if(received < 24) {  // Must be at least a full EIP header
@@ -274,7 +273,7 @@ bool eip_register_session(EipConnection *conn) {
 }
 
 // Sends data using SendRRData and returns the response
-Bytes eip_send_rr_data(EipConnection *conn, Bytes cip_data) {
+Bytes eip_send_rr_data(Arena *a, EipConnection *conn, Bytes cip_data) {
     Bytes packet = create_eip_packet(conn->arena, conn->session_handle, cip_data);
 
     if(send(conn->sock_fd, packet.data, packet.len, 0) < 0) {
@@ -282,7 +281,10 @@ Bytes eip_send_rr_data(EipConnection *conn, Bytes cip_data) {
         return (Bytes){NULL, 0};
     }
 
-    uint8_t *buf = arena_alloc(conn->arena, 4096);
+    // Reset arena after sending request, allocate fresh space for response
+    arena_reset(a);
+    uint8_t *buf = arena_alloc(a, 4096);
+
     ssize_t received = recv(conn->sock_fd, buf, 4096, 0);
     if(received < 0) {
         perror("SendRRData recv failed");
@@ -321,10 +323,16 @@ bool eip_forward_open(EipConnection *conn, uint8_t slot) {
 
     // Wrap in Unconnected Send and send
     Bytes routed = create_unconnected_send(conn->arena, cip_req);
-    Bytes response = eip_send_rr_data(conn, routed);
+    Bytes response = eip_send_rr_data(conn->arena, conn, routed);
 
-    if(response.len < 40) {
-        fprintf(stderr, "Forward Open response too short\n");
+    if(response.len < 36) {  // Minimum: EIP header (24) + address (4) + data header (4) + CIP header (4)
+        if(response.len >= 12) {
+            uint32_t eip_status = 0;
+            struct_unpack(bytes_slice(response, 8, 4), "<I", &eip_status);
+            fprintf(stderr, "Forward Open response too short (got %zu bytes, EIP status: 0x%08X)\n", response.len, eip_status);
+        } else {
+            fprintf(stderr, "Forward Open response too short (got %zu bytes)\n", response.len);
+        }
         return false;
     }
 
@@ -372,7 +380,7 @@ void eip_forward_close(EipConnection *conn) {
     Bytes cip_req = bytes_concat(conn->arena, 4, service, path_len, cm_path, fc_data);
 
     Bytes routed = create_unconnected_send(conn->arena, cip_req);
-    eip_send_rr_data(conn, routed);
+    eip_send_rr_data(conn->arena, conn, routed);
 
     conn->connected = false;
 }
@@ -383,7 +391,7 @@ Bytes send_cip_command(EipConnection *conn, Bytes cip_req) {
     Bytes routed = create_unconnected_send(conn->arena, cip_req);
 
     // 2. Send via SendRRData
-    Bytes response = eip_send_rr_data(conn, routed);
+    Bytes response = eip_send_rr_data(conn->arena, conn, routed);
 
     return response;
 }
