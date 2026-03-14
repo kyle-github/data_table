@@ -188,8 +188,13 @@ class StandardConnection:
 
         # Register Session
         data = struct.pack('<HH', 1, 0)
-        self.sock.sendall(self._enip_header(ENIP_REGISTER_SESSION, 0, data))
+        packet = self._enip_header(ENIP_REGISTER_SESSION, 0, data)
+        print(f"\n[SEND] ({len(packet)} bytes):")
+        hexdump(packet)
+        self.sock.sendall(packet)
         resp = self._recv_enip()
+        print(f"\n[RECV] ({len(resp)} bytes):")
+        hexdump(resp)
         _, self.session, status, _ = self._parse_enip(resp)
         if status != 0:
             raise RuntimeError(f"RegisterSession failed: status=0x{status:08X}")
@@ -229,9 +234,14 @@ class StandardConnection:
         payload = struct.pack('<IHH', 0, 0, 2)  # interface=0, timeout=0, count=2
         payload += struct.pack('<HH', 0x00, 0)   # Null Address Item
         payload += struct.pack('<HH', 0xB2, len(fo)) + fo  # Unconnected Data Item
-        self.sock.sendall(self._enip_header(ENIP_SEND_RR_DATA, self.session, payload))
+        packet = self._enip_header(ENIP_SEND_RR_DATA, self.session, payload)
+        print(f"\n[SEND] ({len(packet)} bytes):")
+        hexdump(packet)
+        self.sock.sendall(packet)
 
         resp = self._recv_enip()
+        print(f"\n[RECV] ({len(resp)} bytes):")
+        hexdump(resp)
         _, _, status, resp_payload = self._parse_enip(resp)
         if status != 0:
             raise RuntimeError(f"Forward Open SendRRData failed: 0x{status:08X}")
@@ -254,8 +264,13 @@ class StandardConnection:
         payload = struct.pack('<IHH', 0, 0, 2)
         payload += struct.pack('<HHI', 0xA1, 4, self.ot_connection_id)
         payload += struct.pack('<HH', 0xB1, len(cip_with_seq)) + cip_with_seq
-        self.sock.sendall(self._enip_header(ENIP_SEND_UNIT_DATA, self.session, payload))
+        packet = self._enip_header(ENIP_SEND_UNIT_DATA, self.session, payload)
+        print(f"\n[SEND] ({len(packet)} bytes):")
+        hexdump(packet)
+        self.sock.sendall(packet)
         resp = self._recv_enip()
+        print(f"\n[RECV] ({len(resp)} bytes):")
+        hexdump(resp)
         _, _, status, resp_payload = self._parse_enip(resp)
         if status != 0:
             raise RuntimeError(f"SendUnitData failed: 0x{status:08X}")
