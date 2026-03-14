@@ -1,9 +1,9 @@
 #ifndef BYTES_H
 #define BYTES_H
 
-#include "arena.h"
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
+#include "arena.h"
 
 // ==========================================
 // PYTHON ABSTRACTION: BYTES OBJECT
@@ -52,18 +52,18 @@ Bytes bytes_concat(Arena *a, int count, ...);
 //   s = C-string (const char*) - packs string bytes, no length prefix or padding
 //   x = padding byte (0x00) - can be prefixed with count (e.g., "8x" = 8 zero bytes)
 //   * = raw bytes insertion - next arg is Bytes* pointer
-// Example: struct_pack(arena, "<BHI", (uint8_t)1, (uint16_t)5, (uint32_t)100)
-// Example: struct_pack(arena, "<HH8xI", 1, 2, 100)  // 2 shorts + 8 zero bytes + 1 int
-// Example: struct_pack(arena, "<BB*H", 1, 2, &bytes, 5)  // 2 bytes + inserted bytes + 1 short
-Bytes struct_pack(Arena *a, const char *fmt, ...);
+// Example: bytes_pack(arena, "<BHI", (uint8_t)1, (uint16_t)5, (uint32_t)100)
+// Example: bytes_pack(arena, "<HH8xI", 1, 2, 100)  // 2 shorts + 8 zero bytes + 1 int
+// Example: bytes_pack(arena, "<BB*H", 1, 2, &bytes, 5)  // 2 bytes + inserted bytes + 1 short
+Bytes bytes_pack(Arena *a, const char *fmt, ...);
 
 // Unpack values from bytes according to format string
 // Pointers to output variables are passed as variadic arguments
 // Returns Bytes of remaining data after parsing, or {NULL, 0} on error
-// Format characters (see struct_pack for details)
+// Format characters (see bytes_pack for details)
 // For 's' format: pass char buffer pointer AND size_t buffer_size
-// Example: uint16_t h; uint32_t i; Bytes rest = struct_unpack(data, "<HI", &h, &i);
-Bytes struct_unpack(Bytes data, const char *fmt, ...);
+// Example: uint16_t h; uint32_t i; Bytes rest = bytes_unpack(data, "<HI", &h, &i);
+Bytes bytes_unpack(Bytes data, const char *fmt, ...);
 
 // ==========================================
 // BYTES SLICING

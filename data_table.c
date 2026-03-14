@@ -54,7 +54,7 @@ uint16_t read_tag_value(EipConnection *conn, Arena *a, const char *tag_name) {
 
     Bytes sym_path = encode_tag_name(a, tag_name);
     uint8_t path_words = (uint8_t)(sym_path.len / 2);
-    Bytes cip_req = struct_pack(a, "<BB*H", 0x4C, path_words, &sym_path, (uint16_t)1);
+    Bytes cip_req = bytes_pack(a, "<BB*H", 0x4C, path_words, &sym_path, (uint16_t)1);
 
     Bytes response = send_cip_command(conn, a, cip_req);
 
@@ -65,7 +65,7 @@ uint16_t read_tag_value(EipConnection *conn, Arena *a, const char *tag_name) {
             Bytes payload = cip_get_response_data(cip_resp);
             if(payload.data != NULL && payload.len >= 6) {
                 uint32_t value_raw = 0;
-                struct_unpack(payload, "<HI", &data_type, &value_raw);
+                bytes_unpack(payload, "<HI", &data_type, &value_raw);
 
                 const char *type_name = "UNKNOWN";
                 if(data_type == 0xC1) {
@@ -99,7 +99,7 @@ uint16_t read_tag_value(EipConnection *conn, Arena *a, const char *tag_name) {
 void get_trend_attributes(EipConnection *conn, Arena *a, uint32_t instance_id) {
     printf("[*] Getting Trend Attributes for instance %u...\n", instance_id);
 
-    Bytes attr_data = struct_pack(a, "<HHHHHHHH", 7, 1, 3, 5, 6, 7, 8, 0x0A);
+    Bytes attr_data = bytes_pack(a, "<HHHHHHHH", 7, 1, 3, 5, 6, 7, 8, 0x0A);
     Bytes cip_req = cip_encode_object_service(a, 0x03, 0xB2, (uint16_t)instance_id, attr_data);
 
     Bytes response = send_cip_command(conn, a, cip_req);
@@ -111,7 +111,7 @@ void get_trend_attributes(EipConnection *conn, Arena *a, uint32_t instance_id) {
             Bytes payload = cip_get_response_data(cip_resp);
             if(payload.data != NULL && payload.len >= 2) {
                 uint16_t attr_count_resp = 0;
-                struct_unpack(payload, "<H", &attr_count_resp);
+                bytes_unpack(payload, "<H", &attr_count_resp);
                 printf("  Attributes: %u\n", attr_count_resp);
             }
         }
@@ -185,7 +185,7 @@ Bytes eip_send_receive(EipConnection *conn, Arena *a, Bytes packet) {
 }
 
 bool eip_register_session(EipConnection *conn, Arena *a) {
-    Bytes reg_payload = struct_pack(a, "<HH", 1, 0);  // protocol, flags
+    Bytes reg_payload = bytes_pack(a, "<HH", 1, 0);  // protocol, flags
     Bytes packet = eip_encode_header(a, EIP_CMD_REGISTER_SESSION, 0, reg_payload);
 
     if(send(conn->sock_fd, packet.data, packet.len, 0) < 0) {
@@ -202,13 +202,13 @@ bool eip_register_session(EipConnection *conn, Arena *a) {
     }
 
     uint32_t eip_status = 0;
-    struct_unpack(bytes_slice(bytes_from_buf(buf, received), 8, received - 8), "<I", &eip_status);
+    bytes_unpack(bytes_slice(bytes_from_buf(buf, received), 8, received - 8), "<I", &eip_status);
     if(eip_status != 0) {
         fprintf(stderr, "RegisterSession failed with EIP status: 0x%08X\n", eip_status);
         return false;
     }
 
-    struct_unpack(bytes_slice(bytes_from_buf(buf, received), 4, received - 4), "<I", &conn->session_handle);
+    bytes_unpack(bytes_slice(bytes_from_buf(buf, received), 4, received - 4), "<I", &conn->session_handle);
     printf("[*] Session registered with handle: 0x%08X\n", conn->session_handle);
     return true;
 }
@@ -261,7 +261,7 @@ bool eip_forward_open(EipConnection *conn, Arena *a) {
         fprintf(stderr, "Forward Open failed with CIP status 0x%02X", cip_resp.header.status);
         if(cip_resp.header.ext_status_words > 0 && cip_resp.payload.len >= 2) {
             uint16_t ext_status = 0;
-            struct_unpack(cip_resp.payload, "<H", &ext_status);
+            bytes_unpack(cip_resp.payload, "<H", &ext_status);
             fprintf(stderr, ", ext_status 0x%04X (%u)", ext_status, ext_status);
         }
         fprintf(stderr, "\n");
@@ -371,7 +371,7 @@ int main() {
         if(cip_resp.header.status == 0) {
             Bytes payload = cip_get_response_data(cip_resp);
             if(payload.data != NULL && payload.len >= 4) {
-                struct_unpack(payload, "<I", &trend_instance_id);
+                bytes_unpack(payload, "<I", &trend_instance_id);
                 printf("[*] Trend Created with Instance ID: %u\n", trend_instance_id);
             }
         } else {

@@ -12,6 +12,7 @@ typedef struct {
     uint8_t *buffer;
     size_t length;
     size_t capacity;
+    size_t high_water;  // peak usage across all resets
 } Arena;
 
 // Initialize the arena with a fixed size
@@ -23,7 +24,13 @@ void *arena_alloc(Arena *a, size_t size);
 // Reset arena to beginning without freeing buffer
 void arena_reset(Arena *a);
 
-// Free arena memory
+// Save current position (returns offset that can be passed to arena_restore)
+size_t arena_save(Arena *a);
+
+// Restore arena to a previously saved position
+void arena_restore(Arena *a, size_t saved);
+
+// Free arena memory (prints high-watermark stats)
 void arena_free(Arena *a);
 
 #endif

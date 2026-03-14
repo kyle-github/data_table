@@ -1,7 +1,7 @@
 #include "bytes.h"
-#include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 // Helper to wrap a string literal into Bytes
 Bytes b_str(Arena *a, const char *str) {
@@ -89,20 +89,28 @@ Bytes bytes_concat(Arena *a, int count, ...) {
 // Determine byte order from format string
 // Returns 1 for little-endian, -1 for big-endian, 0 for native
 static int get_byte_order(const char *fmt) {
-    if(!fmt || !*fmt) return 0;  // native
-    if(*fmt == '<') return 1;    // little-endian
-    if(*fmt == '>') return -1;   // big-endian
-    if(*fmt == '=') return 0;    // native
-    if(*fmt == '@') return 0;    // native
-    return 0;                    // default: native
+    if(!fmt || !*fmt) {
+        return 0;  // native
+    }
+    if(*fmt == '<') {
+        return 1;  // little-endian
+    }
+    if(*fmt == '>') {
+        return -1;  // big-endian
+    }
+    if(*fmt == '=') {
+        return 0;  // native
+    }
+    if(*fmt == '@') {
+        return 0;  // native
+    }
+    return 0;  // default: native
 }
 
 // Skip byte order prefix if present
 static const char *skip_byte_order(const char *fmt) {
-    if(!fmt || !*fmt) return fmt;
-    if(*fmt == '<' || *fmt == '>' || *fmt == '=' || *fmt == '@') {
-        return fmt + 1;
-    }
+    if(!fmt || !*fmt) { return fmt; }
+    if(*fmt == '<' || *fmt == '>' || *fmt == '=' || *fmt == '@') { return fmt + 1; }
     return fmt;
 }
 
@@ -110,13 +118,13 @@ static const char *skip_byte_order(const char *fmt) {
 // For 's' format, value should be cast to (const char*)
 // Returns number of bytes written, or 0 on error
 static size_t pack_value(uint8_t *buf, uint64_t value, const char *str, char fmt_char, int byte_order) {
-    if(byte_order == 0) byte_order = 1;  // default to little-endian
+    if(byte_order == 0) {
+        byte_order = 1;  // default to little-endian
+    }
 
     switch(fmt_char) {
         case 'b':
-        case 'B':
-            buf[0] = (uint8_t)value;
-            return 1;
+        case 'B': buf[0] = (uint8_t)value; return 1;
 
         case 'h':
         case 'H': {
@@ -152,13 +160,9 @@ static size_t pack_value(uint8_t *buf, uint64_t value, const char *str, char fmt
         case 'Q': {
             uint64_t v = value;
             if(byte_order > 0) {
-                for(int i = 0; i < 8; i++) {
-                    buf[i] = (v >> (i * 8)) & 0xFF;
-                }
+                for(int i = 0; i < 8; i++) { buf[i] = (v >> (i * 8)) & 0xFF; }
             } else {
-                for(int i = 0; i < 8; i++) {
-                    buf[i] = (v >> ((7 - i) * 8)) & 0xFF;
-                }
+                for(int i = 0; i < 8; i++) { buf[i] = (v >> ((7 - i) * 8)) & 0xFF; }
             }
             return 8;
         }
@@ -182,39 +186,35 @@ static size_t pack_value(uint8_t *buf, uint64_t value, const char *str, char fmt
         case 'd': {
             uint64_t v = value;  // bit representation
             if(byte_order > 0) {
-                for(int i = 0; i < 8; i++) {
-                    buf[i] = (v >> (i * 8)) & 0xFF;
-                }
+                for(int i = 0; i < 8; i++) { buf[i] = (v >> (i * 8)) & 0xFF; }
             } else {
-                for(int i = 0; i < 8; i++) {
-                    buf[i] = (v >> ((7 - i) * 8)) & 0xFF;
-                }
+                for(int i = 0; i < 8; i++) { buf[i] = (v >> ((7 - i) * 8)) & 0xFF; }
             }
             return 8;
         }
 
         case 's': {
             // C-string: pack raw bytes, no length prefix or padding
-            if(!str) return 0;
+            if(!str) { return 0; }
             size_t len = strlen(str);
             memcpy(buf, str, len);
             return len;
         }
 
-        default:
-            return 0;
+        default: return 0;
     }
 }
 
 // Unpack single value from buffer at offset
 // Returns the value as uint64_t (or bit-compatible representation for float/double)
 static uint64_t unpack_value(const uint8_t *buf, char fmt_char, int byte_order) {
-    if(byte_order == 0) byte_order = 1;  // default to little-endian
+    if(byte_order == 0) {
+        byte_order = 1;  // default to little-endian
+    }
 
     switch(fmt_char) {
         case 'b':
-        case 'B':
-            return (uint64_t)buf[0];
+        case 'B': return (uint64_t)buf[0];
 
         case 'h':
         case 'H': {
@@ -228,11 +228,9 @@ static uint64_t unpack_value(const uint8_t *buf, char fmt_char, int byte_order) 
         case 'i':
         case 'I': {
             if(byte_order > 0) {
-                return (uint64_t)buf[0] | ((uint64_t)buf[1] << 8) |
-                       ((uint64_t)buf[2] << 16) | ((uint64_t)buf[3] << 24);
+                return (uint64_t)buf[0] | ((uint64_t)buf[1] << 8) | ((uint64_t)buf[2] << 16) | ((uint64_t)buf[3] << 24);
             } else {
-                return ((uint64_t)buf[0] << 24) | ((uint64_t)buf[1] << 16) |
-                       ((uint64_t)buf[2] << 8) | (uint64_t)buf[3];
+                return ((uint64_t)buf[0] << 24) | ((uint64_t)buf[1] << 16) | ((uint64_t)buf[2] << 8) | (uint64_t)buf[3];
             }
         }
 
@@ -240,13 +238,9 @@ static uint64_t unpack_value(const uint8_t *buf, char fmt_char, int byte_order) 
         case 'Q': {
             uint64_t v = 0;
             if(byte_order > 0) {
-                for(int i = 0; i < 8; i++) {
-                    v |= ((uint64_t)buf[i] << (i * 8));
-                }
+                for(int i = 0; i < 8; i++) { v |= ((uint64_t)buf[i] << (i * 8)); }
             } else {
-                for(int i = 0; i < 8; i++) {
-                    v |= ((uint64_t)buf[i] << ((7 - i) * 8));
-                }
+                for(int i = 0; i < 8; i++) { v |= ((uint64_t)buf[i] << ((7 - i) * 8)); }
             }
             return v;
         }
@@ -255,32 +249,25 @@ static uint64_t unpack_value(const uint8_t *buf, char fmt_char, int byte_order) 
         case 'd': {
             uint64_t v = 0;
             if(byte_order > 0) {
-                for(int i = 0; i < (fmt_char == 'f' ? 4 : 8); i++) {
-                    v |= ((uint64_t)buf[i] << (i * 8));
-                }
+                for(int i = 0; i < (fmt_char == 'f' ? 4 : 8); i++) { v |= ((uint64_t)buf[i] << (i * 8)); }
             } else {
                 int size = (fmt_char == 'f' ? 4 : 8);
-                for(int i = 0; i < size; i++) {
-                    v |= ((uint64_t)buf[i] << ((size - 1 - i) * 8));
-                }
+                for(int i = 0; i < size; i++) { v |= ((uint64_t)buf[i] << ((size - 1 - i) * 8)); }
             }
             return v;
         }
 
         case 's':
-            // String unpack: handled separately in struct_unpack
+            // String unpack: handled separately in bytes_unpack
             return 0;
 
-        default:
-            return 0;
+        default: return 0;
     }
 }
 
 // Pack values into bytes according to format string
-Bytes struct_pack(Arena *a, const char *fmt, ...) {
-    if(!fmt || !*fmt) {
-        return (Bytes){NULL, 0};
-    }
+Bytes bytes_pack(Arena *a, const char *fmt, ...) {
+    if(!fmt || !*fmt) { return (Bytes){NULL, 0}; }
 
     int byte_order = get_byte_order(fmt);
     const char *format_chars = skip_byte_order(fmt);
@@ -289,7 +276,7 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
     va_list args_count;
     va_start(args_count, fmt);
     size_t total_size = 0;
-    for(const char *p = format_chars; *p; ) {
+    for(const char *p = format_chars; *p;) {
         // Parse optional count prefix
         size_t count = 1;
         if(*p >= '0' && *p <= '9') {
@@ -298,7 +285,9 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
                 count = count * 10 + (*p - '0');
                 p++;
             }
-            if(!*p) break;  // malformed format
+            if(!*p) {
+                break;  // malformed format
+            }
         }
 
         char c = *p++;
@@ -307,30 +296,32 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
             total_size += count;
         } else if(c == '*') {
             // Raw bytes insertion - consume Bytes* arg
-            Bytes *b = va_arg(args_count, Bytes*);
-            if(b) total_size += b->len;
+            Bytes *b = va_arg(args_count, Bytes *);
+            if(b) { total_size += b->len; }
         } else if(c == 's') {
             // String - consume const char* arg
-            const char *str = va_arg(args_count, const char*);
-            if(str) total_size += strlen(str);
+            const char *str = va_arg(args_count, const char *);
+            if(str) { total_size += strlen(str); }
         } else if(c == 'b' || c == 'B') {
             total_size += 1 * count;
-            for(size_t i = 0; i < count; i++) va_arg(args_count, uint64_t);
+            for(size_t i = 0; i < count; i++) { va_arg(args_count, uint64_t); }
         } else if(c == 'h' || c == 'H') {
             total_size += 2 * count;
-            for(size_t i = 0; i < count; i++) va_arg(args_count, uint64_t);
+            for(size_t i = 0; i < count; i++) { va_arg(args_count, uint64_t); }
         } else if(c == 'i' || c == 'I') {
             total_size += 4 * count;
-            for(size_t i = 0; i < count; i++) va_arg(args_count, uint64_t);
+            for(size_t i = 0; i < count; i++) { va_arg(args_count, uint64_t); }
         } else if(c == 'f') {
             total_size += 4 * count;
-            for(size_t i = 0; i < count; i++) va_arg(args_count, double);  // floats promoted to double
+            for(size_t i = 0; i < count; i++) {
+                va_arg(args_count, double);  // floats promoted to double
+            }
         } else if(c == 'q' || c == 'Q') {
             total_size += 8 * count;
-            for(size_t i = 0; i < count; i++) va_arg(args_count, uint64_t);
+            for(size_t i = 0; i < count; i++) { va_arg(args_count, uint64_t); }
         } else if(c == 'd') {
             total_size += 8 * count;
-            for(size_t i = 0; i < count; i++) va_arg(args_count, double);
+            for(size_t i = 0; i < count; i++) { va_arg(args_count, double); }
         } else {
             // Unknown format, consume arg
             va_arg(args_count, uint64_t);
@@ -338,9 +329,7 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
     }
     va_end(args_count);
 
-    if(total_size == 0) {
-        return (Bytes){NULL, 0};
-    }
+    if(total_size == 0) { return (Bytes){NULL, 0}; }
 
     // Allocate buffer
     uint8_t *buf = arena_alloc(a, total_size);
@@ -350,7 +339,7 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
     va_start(args, fmt);
 
     size_t offset = 0;
-    for(const char *p = format_chars; *p; ) {
+    for(const char *p = format_chars; *p;) {
         // Parse optional count prefix
         size_t count = 1;
         if(*p >= '0' && *p <= '9') {
@@ -359,7 +348,9 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
                 count = count * 10 + (*p - '0');
                 p++;
             }
-            if(!*p) break;  // malformed format
+            if(!*p) {
+                break;  // malformed format
+            }
         }
 
         char c = *p++;
@@ -369,13 +360,13 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
             offset += count;
         } else if(c == '*') {
             // Raw bytes insertion
-            Bytes *b = va_arg(args, Bytes*);
+            Bytes *b = va_arg(args, Bytes *);
             if(b && b->data) {
                 memcpy(buf + offset, b->data, b->len);
                 offset += b->len;
             }
         } else if(c == 's') {
-            const char *str = va_arg(args, const char*);
+            const char *str = va_arg(args, const char *);
             size_t written = pack_value(buf + offset, 0, str, c, byte_order);
             offset += written;
         } else {
@@ -407,10 +398,8 @@ Bytes struct_pack(Arena *a, const char *fmt, ...) {
 }
 
 // Unpack values from bytes according to format string
-Bytes struct_unpack(Bytes data, const char *fmt, ...) {
-    if(!fmt || !*fmt || !data.data) {
-        return (Bytes){NULL, 0};
-    }
+Bytes bytes_unpack(Bytes data, const char *fmt, ...) {
+    if(!fmt || !*fmt || !data.data) { return (Bytes){NULL, 0}; }
 
     int byte_order = get_byte_order(fmt);
     const char *format_chars = skip_byte_order(fmt);
@@ -419,10 +408,15 @@ Bytes struct_unpack(Bytes data, const char *fmt, ...) {
     size_t expected_size = 0;
     for(const char *p = format_chars; *p; p++) {
         char c = *p;
-        if(c == 'b' || c == 'B') expected_size += 1;
-        else if(c == 'h' || c == 'H') expected_size += 2;
-        else if(c == 'i' || c == 'I' || c == 'f') expected_size += 4;
-        else if(c == 'q' || c == 'Q' || c == 'd') expected_size += 8;
+        if(c == 'b' || c == 'B') {
+            expected_size += 1;
+        } else if(c == 'h' || c == 'H') {
+            expected_size += 2;
+        } else if(c == 'i' || c == 'I' || c == 'f') {
+            expected_size += 4;
+        } else if(c == 'q' || c == 'Q' || c == 'd') {
+            expected_size += 8;
+        }
     }
 
     if(data.len < expected_size) {
@@ -485,9 +479,7 @@ Bytes struct_unpack(Bytes data, const char *fmt, ...) {
 // ==========================================
 
 // Create a Bytes from a pointer and length (no allocation, just wraps)
-Bytes bytes_from_buf(const uint8_t *buf, size_t len) {
-    return (Bytes){(uint8_t *)buf, len};
-}
+Bytes bytes_from_buf(const uint8_t *buf, size_t len) { return (Bytes){(uint8_t *)buf, len}; }
 
 // Create a Bytes slice from another Bytes (no allocation, just wraps)
 Bytes bytes_slice(Bytes b, size_t offset, size_t len) {
@@ -517,7 +509,7 @@ void bytes_hexdump(Bytes b, const char *label) {
         size_t chunk_size = (b.len - i < 16) ? (b.len - i) : 16;
         for(size_t j = 0; j < chunk_size; j++) {
             printf("%02X", b.data[i + j]);
-            if(j < chunk_size - 1) printf(" ");
+            if(j < chunk_size - 1) { printf(" "); }
         }
         printf("\n");
     }
