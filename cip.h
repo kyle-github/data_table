@@ -11,6 +11,7 @@
 // EIP ENCAPSULATION
 // ==========================================
 
+#define EIP_CMD_LIST_IDENTITY 0x0063
 #define EIP_CMD_REGISTER_SESSION 0x0065
 #define EIP_CMD_SEND_RR_DATA 0x006F
 #define EIP_CMD_SEND_UNIT_DATA 0x0070
