@@ -343,21 +343,26 @@ int main() {
     if(!eip_register_session(&conn, &mem)) {
         fprintf(stderr, "Failed to register session.\n");
         eip_disconnect(&conn);
+        printf("[arena] high-water: %zu / %zu bytes\n", mem.high_water, mem.capacity);
         arena_free(&mem);
         return 1;
     }
+    printf("[arena] after register_session: high-water=%zu\n", mem.high_water);
 
     // Step 0: Forward Open
     printf("[*] Opening Forward Open connection...\n");
     if(!eip_forward_open(&conn, &mem)) {
         fprintf(stderr, "Failed to open Forward Open connection.\n");
         eip_disconnect(&conn);
+        printf("[arena] high-water: %zu / %zu bytes\n", mem.high_water, mem.capacity);
         arena_free(&mem);
         return 1;
     }
+    printf("[arena] after forward_open: high-water=%zu\n", mem.high_water);
 
     // Step 1: Read tag value and determine data type
     uint16_t tag_data_type = read_tag_value(&conn, &mem, tag_name);
+    printf("[arena] after read_tag_value: high-water=%zu\n", mem.high_water);
 
     // Step 2: Create Trend Object (Service 0x08, Class 0xB2, Inst 0)
     printf("[*] Creating Trend Object...\n");
@@ -380,6 +385,7 @@ int main() {
         }
     }
     arena_reset(&mem);
+    printf("[arena] after create_trend: high-water=%zu\n", mem.high_water);
 
     // Step 3: SetAttributeList (Service 0x04, Class 0xB2, Inst ID)
     printf("[*] Setting Attributes (sample_rate=10ms, state=0)...\n");
@@ -391,6 +397,7 @@ int main() {
         printf("[*] SetAttributes response status: 0x%02X\n", cip_resp.header.status);
     }
     arena_reset(&mem);
+    printf("[arena] after set_attrs: high-water=%zu\n", mem.high_water);
 
     get_trend_attributes(&conn, &mem, trend_instance_id);
 
@@ -404,6 +411,7 @@ int main() {
         printf("[*] AddTag response status: 0x%02X\n", cip_resp.header.status);
     }
     arena_reset(&mem);
+    printf("[arena] after add_tag: high-water=%zu\n", mem.high_water);
 
     // Step 5: Start Trend (Service 0x06, Class 0xB2, Inst ID)
     printf("[*] Starting Trend...\n");
@@ -414,6 +422,7 @@ int main() {
         printf("[*] Start response status: 0x%02X\n", cip_resp.header.status);
     }
     arena_reset(&mem);
+    printf("[arena] after start_trend: high-water=%zu\n", mem.high_water);
 
     get_trend_attributes(&conn, &mem, trend_instance_id);
 
@@ -474,6 +483,7 @@ int main() {
 
     eip_forward_close(&conn, &mem);
     eip_disconnect(&conn);
+    printf("[arena] high-water: %zu / %zu bytes\n", mem.high_water, mem.capacity);
     arena_free(&mem);
     return 0;
 }
