@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -O2
+CFLAGS = -Wall -O2 -g -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
 TARGET = data_table
 TEST_TARGET = test_bytes
 SOURCES = data_table.c arena.c bytes.c cip.c
