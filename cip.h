@@ -1,101 +1,136 @@
 #ifndef CIP_H
 #define CIP_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include "arena.h"
 #include "bytes.h"
-#include <stdint.h>
-#include <stddef.h>
 
 // ==========================================
-// GENERIC CIP/EIP PACKET BUILDERS
+// EIP ENCAPSULATION
 // ==========================================
 
-// Generic CIP Request Builder
-// Builds: [Service][PathLen][Path][Data]
-Bytes create_cip_request(Arena *a, uint8_t service_code, Bytes path, Bytes data);
+#define EIP_CMD_REGISTER_SESSION 0x0065
+#define EIP_CMD_SEND_RR_DATA 0x006F
+#define EIP_CMD_SEND_UNIT_DATA 0x0070
 
-// Wraps a CIP request in an Unconnected Send (Service 0x52) to route it
-// Routes to: Backplane Port 1, Slot 4
-Bytes create_unconnected_send(Arena *a, Bytes inner_request);
+// Encode EIP encapsulation header + payload
+// Header: Command(2) Length(2) Session(4) Status(4) Context(8) Options(4)
+Bytes eip_encode_header(Arena *a, uint16_t command, uint32_t session_handle, Bytes payload);
 
-// Wraps CIP data in EtherNet/IP SendRRData (0x6F) packet (unconnected format)
-Bytes create_eip_packet(Arena *a, uint32_t session_handle, Bytes cip_data);
+// ==========================================
+// CPF (COMMON PACKET FORMAT)
+// ==========================================
 
-// Wraps CIP data in EtherNet/IP SendRRData (0x6F) packet (connected transport format)
-// Uses connection ID in CPF Address Item instead of empty address item
-Bytes create_connected_packet(Arena *a, uint32_t session_handle, uint32_t connection_id, Bytes cip_data);
+// Encode CPF for unconnected messaging (SendRRData)
+// Format: Interface(4) Timeout(2) ItemCount(2) NullAddr(4) DataItem(type+len) + payload
+Bytes cpf_encode_unconnected(Arena *a, Bytes payload);
+
+// Encode CPF for connected messaging (SendUnitData)
+// Format: Interface(4) Timeout(2) ItemCount(2) ConnAddr(8) DataItem(type+len+seq) + payload
+Bytes cpf_encode_connected(Arena *a, uint32_t conn_id, uint16_t conn_sequence_num, Bytes payload);
+
+// ==========================================
+// CIP SERVICE ENCODING
+// ==========================================
+
+// Encode a CIP service request with a class/instance path
+// Format: [Service][PathLen_words][class_segment][instance_segment][service_data]
+Bytes cip_encode_object_service(Arena *a, uint8_t service, uint16_t class_id, uint16_t instance_id, Bytes service_data);
+
+// Wrap a CIP request in an Unconnected Send (service 0x52 to Connection Manager)
+// payload = the inner CIP request to send through the route
+// route = port/link path to the target device (e.g., backplane port 1, slot 4)
+Bytes cip_encode_unconnected(Arena *a, Bytes payload, Bytes route);
+
+// ==========================================
+// FORWARD OPEN / CLOSE
+// ==========================================
+
+typedef struct {
+    uint32_t ot_connection_id;
+    uint32_t to_connection_id;
+    uint16_t connection_serial;
+    uint16_t vendor_id;
+    uint32_t originator_serial;
+    uint8_t timeout_multiplier;
+    uint32_t ot_rpi;     // O->T RPI in microseconds
+    uint16_t ot_params;  // O->T network connection parameters
+    uint32_t to_rpi;     // T->O RPI in microseconds
+    uint16_t to_params;  // T->O network connection parameters
+    uint8_t transport_trigger;
+} ForwardOpenParams;
+
+// Encode Forward Open payload (tick/timeout + parameters + connection path)
+// device_mr_route = route to the end device's Message Router
+//                   (e.g., port 1 slot 4 + class 0x02 instance 0x01)
+Bytes cip_encode_forward_open_payload(Arena *a, ForwardOpenParams params, Bytes device_mr_route);
+
+// Encode Forward Close payload
+// device_mr_route = same route used in Forward Open
+Bytes cip_encode_forward_close_payload(Arena *a, uint16_t connection_serial, uint16_t vendor_id, uint32_t originator_serial,
+                                       Bytes device_mr_route);
+
+typedef struct {
+    uint32_t ot_connection_id;
+    uint32_t to_connection_id;
+    uint16_t connection_serial;
+    uint16_t vendor_id;
+    uint32_t originator_serial;
+    bool valid;
+} ForwardOpenResponse;
+
+// ==========================================
+// CIP PATH / SEGMENT BUILDERS
+// ==========================================
+
+// Build a class/instance path: [0x20][class][0x24/0x25][instance]
+Bytes create_cip_class_path(Arena *a, uint8_t class_id, uint32_t instance_id);
+
+// Encode a port/link segment (e.g., backplane port 1, slot N)
+Bytes cip_encode_port_segment(Arena *a, uint8_t port, uint8_t slot);
+
+// Encode a route to a device's Message Router: port/slot + class 2, instance 1
+Bytes cip_encode_mr_route(Arena *a, uint8_t port, uint8_t slot);
+
+// Encode tag name as ANSI Extended Symbol Segment
+Bytes encode_tag_name(Arena *a, const char *tag);
 
 // ==========================================
 // CIP RESPONSE PARSING
 // ==========================================
 
-// CIP Response Header (4 bytes)
 typedef struct {
-    uint8_t srv;                  // Service code
-    uint8_t reserved;             // Reserved
-    uint8_t status;               // Status code
-    uint8_t ext_status_words;     // Extended status size in uint16_t words
+    uint8_t srv;
+    uint8_t reserved;
+    uint8_t status;
+    uint8_t ext_status_words;
 } CipResponseHeader;
 
-// CIP response with header and payload
-// If ext_status_words > 0, extended status is in the first ext_status_words*2 bytes of payload
-// Remaining bytes (if any) are the actual response data
 typedef struct {
     CipResponseHeader header;
-    Bytes payload;  // Includes extended status (if present) + response data
+    Bytes payload;  // extended status (if any) + response data
 } CipResponse;
 
-// Parse CIP response from unconnected send wrapper
-// Finds the CIP response within the EIP packet and parses it
-// Returns response header and payload (includes extended status bytes if present)
-CipResponse parse_cip_response(Bytes response);
+// Parse EIP response — extracts CIP response from within EIP/CPF envelope
+// Works for both unconnected (SendRRData) and connected (SendUnitData)
+CipResponse eip_parse_response(Bytes response);
 
-// Extract data portion from CIP response payload
-// Skips extended status words if present
-// Returns: Bytes containing only the response data (after extended status)
+// Extract data portion from CIP response (skips extended status words)
 Bytes cip_get_response_data(CipResponse cip_resp);
 
-// ==========================================
-// CIP PATH BUILDERS
-// ==========================================
-
-// Helper for Class/Instance paths (e.g., 20 B2 24 01)
-// Handles both 8-bit and 16-bit instance IDs with proper padding
-// Example: create_cip_class_path(a, 0xB2, 1) -> "20 B2 24 01"
-Bytes create_cip_class_path(Arena *a, uint8_t class_id, uint32_t instance_id);
-
-// Encodes a string tag into CIP Path format (ANSI Extended Symbol Segment)
-// Format: [0x91][length][string_bytes][optional_padding_if_odd]
-// Example: encode_tag_name(a, "Test") -> 0x91 0x04 'T' 'e' 's' 't' 0x00
-Bytes encode_tag_name(Arena *a, const char *tag);
+// Parse Forward Open response payload
+ForwardOpenResponse cip_parse_forward_open_response(CipResponse cip_resp);
 
 // ==========================================
 // TREND OBJECT PAYLOAD BUILDERS
 // ==========================================
 
-// Create Trend payload for service 0x08
-// Format: [attr_count:u16=2][attr_id:u16=8][buffer_size:u32][attr_id:u16=3][num_tags:u8]
 Bytes create_trend_payload(Arena *a, uint32_t buffer_size, uint8_t num_tags);
-
-// SetAttributeList payload for service 0x04
-// Format: [attr_count:u16=2][attr_id:u16=1][sample_rate:u32][attr_id:u16=5][state:u8]
 Bytes create_set_attrs_payload(Arena *a, uint32_t sample_rate_us, uint8_t state);
-
-// AddTag payload for service 0x4E
-// Format: [num_tags:u16=1][tag_index:u8=1][type:u8=1][path_size_words:u8][symbolic_path][mask:u32=0xFFFFFFFF]
 Bytes create_add_tag_payload(Arena *a, const char *tag_name);
-
-// RemoveTag payload for service 0x4F
-// Format: [tag_index:u16]
 Bytes create_remove_tag_payload(Arena *a, uint16_t tag_index);
-
-// ==========================================
-// CIP RESPONSE PARSERS
-// ==========================================
-
-// Parse samples from ReadData response (service 0x4C)
-// Format: [count:u16][timestamp:u32][value:u32] repeated
-// data_type: 0xC4=DINT, 0xCA=REAL, etc.
 void parse_and_print_samples(Bytes payload, uint16_t data_type);
 
 #endif
