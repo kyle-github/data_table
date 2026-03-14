@@ -265,7 +265,7 @@ Bytes eip_send_unit_data(EipConnection *conn, Bytes cip_message) {
 
     // Build EIP header with SendUnitData command (0x0070)
     // Format: Command(2), Length(2), Session(4), Status(4), Context(8), Options(4)
-    fprintf(stderr, "[DEBUG] Header values: cmd=0x%04X, len=%u, session=0x%08X, status=0, options=0\n",
+    fprintf(stderr, "[DEBUG] Header values: cmd=0x%04X, len=%zu, session=0x%08X, status=0, options=0\n",
             0x0070, payload.len, conn->session_handle);
     fflush(stderr);
 
@@ -385,8 +385,9 @@ bool eip_forward_open(EipConnection *conn, uint8_t slot) {
                                  // Connection path
                                  struct_pack(conn->arena, "<B*", (uint8_t)(conn_path.len / 2), &conn_path));
 
-    // Send directly via SendRRData (NOT wrapped in Unconnected Send!)
-    Bytes response = eip_send_rr_data(conn->arena, conn, fo_data);
+    // Wrap in Unconnected Send for proper routing to target device
+    Bytes routed = create_unconnected_send(conn->arena, fo_data);
+    Bytes response = eip_send_rr_data(conn->arena, conn, routed);
 
     if(response.len < 36) {  // Minimum: EIP header (24) + address (4) + data header (4) + CIP header (4)
         if(response.len >= 12) {

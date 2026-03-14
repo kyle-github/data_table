@@ -37,7 +37,7 @@ Bytes create_unconnected_send(Arena *a, Bytes inner_request) {
 Bytes create_eip_packet(Arena *a, uint32_t session_handle, Bytes cip_data) {
     // Payload header: Interface(4) + Timeout(2) + ItemCount(2) + AddressItem(type+len) + DataItem(type+len)
     Bytes payload_header = struct_pack(a, "<IHHHHHH",
-                                       0, 0, 2,                    // interface, timeout, item_count
+                                       0, 1, 2,                    // interface, timeout (1 second), item_count
                                        0x0000, 0x0000,             // address item (type, len)
                                        0x00B2, (uint16_t)cip_data.len);  // data item (type, len)
 
@@ -50,18 +50,18 @@ Bytes create_eip_packet(Arena *a, uint32_t session_handle, Bytes cip_data) {
 }
 
 // Wraps in EtherNet/IP Header (SendRRData 0x6F) - connected transport format
-// Uses connection_id in CPF Address Item (type 0x8000, length 4)
+// Uses connection_id in CPF Address Item (type 0x00A1, length 4)
 Bytes create_connected_packet(Arena *a, uint32_t session_handle, uint32_t connection_id, Bytes cip_data) {
     // CPF Header: Interface(4) + Timeout(2) + ItemCount(2)
-    Bytes cpf_header = struct_pack(a, "<IHH", 0, 0, 2);
+    Bytes cpf_header = struct_pack(a, "<IHH", 0, 1, 2);
 
-    // Address Item: Type 0x8000 (connection ID), Length 4
+    // Address Item: Type 0x00A1 (Connected Address Item), Length 4
     Bytes address_item = bytes_concat(a, 2,
-                                      struct_pack(a, "<HH", 0x8000, 4),
+                                      struct_pack(a, "<HH", 0x00A1, 4),
                                       struct_pack(a, "<I", connection_id));
 
-    // Data Item: Type 0x00B2, Length = len(cip_data)
-    Bytes data_item_header = struct_pack(a, "<HH", 0x00B2, (uint16_t)cip_data.len);
+    // Data Item: Type 0x00B1 (Connected Data Item), Length = len(cip_data)
+    Bytes data_item_header = struct_pack(a, "<HH", 0x00B1, (uint16_t)cip_data.len);
 
     // Payload = CPF Header + Address Item + Data Item Header + CIP Data
     Bytes payload = bytes_concat(a, 4, cpf_header, address_item, data_item_header, cip_data);
