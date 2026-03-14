@@ -404,18 +404,25 @@ Bytes bytes_unpack(Bytes data, const char *fmt, ...) {
     int byte_order = get_byte_order(fmt);
     const char *format_chars = skip_byte_order(fmt);
 
-    // Calculate expected size (excluding strings)
+    // Calculate expected size (including x skip bytes, supporting count prefix)
     size_t expected_size = 0;
-    for(const char *p = format_chars; *p; p++) {
-        char c = *p;
-        if(c == 'b' || c == 'B') {
-            expected_size += 1;
+    for(const char *p = format_chars; *p;) {
+        size_t count = 1;
+        if(*p >= '0' && *p <= '9') {
+            count = 0;
+            while(*p >= '0' && *p <= '9') { count = count * 10 + (*p++ - '0'); }
+        }
+        char c = *p++;
+        if(c == 'x') {
+            expected_size += count;
+        } else if(c == 'b' || c == 'B') {
+            expected_size += count * 1;
         } else if(c == 'h' || c == 'H') {
-            expected_size += 2;
+            expected_size += count * 2;
         } else if(c == 'i' || c == 'I' || c == 'f') {
-            expected_size += 4;
+            expected_size += count * 4;
         } else if(c == 'q' || c == 'Q' || c == 'd') {
-            expected_size += 8;
+            expected_size += count * 8;
         }
     }
 
@@ -428,44 +435,61 @@ Bytes bytes_unpack(Bytes data, const char *fmt, ...) {
     va_start(args, fmt);
 
     size_t offset = 0;
-    for(const char *p = format_chars; *p; p++) {
-        char c = *p;
-        void *ptr = va_arg(args, void *);
-        uint64_t val = unpack_value(data.data + offset, c, byte_order);
+    for(const char *p = format_chars; *p;) {
+        // Parse optional count prefix
+        size_t count = 1;
+        if(*p >= '0' && *p <= '9') {
+            count = 0;
+            while(*p >= '0' && *p <= '9') { count = count * 10 + (*p++ - '0'); }
+        }
+        char c = *p++;
 
-        // Store result in appropriate type
-        if(c == 'b') {
-            *(int8_t *)ptr = (int8_t)val;
-            offset += 1;
-        } else if(c == 'B') {
-            *(uint8_t *)ptr = (uint8_t)val;
-            offset += 1;
-        } else if(c == 'h') {
-            *(int16_t *)ptr = (int16_t)val;
-            offset += 2;
-        } else if(c == 'H') {
-            *(uint16_t *)ptr = (uint16_t)val;
-            offset += 2;
-        } else if(c == 'i') {
-            *(int32_t *)ptr = (int32_t)val;
-            offset += 4;
-        } else if(c == 'I') {
-            *(uint32_t *)ptr = (uint32_t)val;
-            offset += 4;
-        } else if(c == 'q') {
-            *(int64_t *)ptr = (int64_t)val;
-            offset += 8;
-        } else if(c == 'Q') {
-            *(uint64_t *)ptr = val;
-            offset += 8;
-        } else if(c == 'f') {
-            float fval = *(float *)&val;
-            *(float *)ptr = fval;
-            offset += 4;
-        } else if(c == 'd') {
-            double dval = *(double *)&val;
-            *(double *)ptr = dval;
-            offset += 8;
+        if(c == 'x') {
+            // Skip bytes — no arg consumed
+            offset += count;
+            continue;
+        }
+
+        for(size_t i = 0; i < count; i++) {
+            void *ptr = va_arg(args, void *);
+            uint64_t val = unpack_value(data.data + offset, c, byte_order);
+
+            if(c == 'b') {
+                *(int8_t *)ptr = (int8_t)val;
+                offset += 1;
+            } else if(c == 'B') {
+                *(uint8_t *)ptr = (uint8_t)val;
+                offset += 1;
+            } else if(c == 'h') {
+                *(int16_t *)ptr = (int16_t)val;
+                offset += 2;
+            } else if(c == 'H') {
+                *(uint16_t *)ptr = (uint16_t)val;
+                offset += 2;
+            } else if(c == 'i') {
+                *(int32_t *)ptr = (int32_t)val;
+                offset += 4;
+            } else if(c == 'I') {
+                *(uint32_t *)ptr = (uint32_t)val;
+                offset += 4;
+            } else if(c == 'q') {
+                *(int64_t *)ptr = (int64_t)val;
+                offset += 8;
+            } else if(c == 'Q') {
+                *(uint64_t *)ptr = val;
+                offset += 8;
+            } else if(c == 'f') {
+                float fval;
+                uint32_t bits = (uint32_t)val;
+                memcpy(&fval, &bits, 4);
+                *(float *)ptr = fval;
+                offset += 4;
+            } else if(c == 'd') {
+                double dval;
+                memcpy(&dval, &val, 8);
+                *(double *)ptr = dval;
+                offset += 8;
+            }
         }
     }
 
