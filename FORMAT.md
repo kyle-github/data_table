@@ -1,5 +1,7 @@
 # bytes_pack / bytes_unpack Format String Reference
 
+**WARNING** Not all of this is implemented!
+
 ## Overview
 
 Format strings control how C values are packed into and unpacked from byte
